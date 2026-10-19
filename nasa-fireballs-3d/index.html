@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NASA CNEOS - Historique des Bolides 3D</title>
+    <link rel="shortcut icon" href="#">
+    <style>
+        body { 
+            margin: 0; 
+            overflow: hidden; 
+            background-color: #030712; 
+            color: white; 
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; 
+        }
+        #canvas-container { 
+            width: 100vw; 
+            height: 100vh; 
+            position: absolute; 
+            top: 0; 
+            left: 0; 
+            z-index: 1; 
+        }
+        
+        /* Interface Utilisateur */
+        #ui-container {
+            position: absolute; 
+            bottom: 30px; 
+            left: 50%; 
+            transform: translateX(-50%);
+            width: 90%; 
+            max-width: 800px; 
+            z-index: 10;
+            background: rgba(15, 23, 42, 0.85); 
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.15); 
+            border-radius: 16px;
+            padding: 20px; 
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6);
+            display: flex; 
+            flex-direction: column; 
+            gap: 15px;
+        }
+
+        #loading {
+            position: absolute; 
+            top: 50%; 
+            left: 50%; 
+            transform: translate(-50%, -50%);
+            z-index: 20; 
+            font-size: 18px; 
+            font-weight: 600; 
+            color: #ef4444;
+            background: rgba(15, 23, 42, 0.95); 
+            padding: 16px 28px; 
+            border-radius: 12px;
+            border: 1px solid rgba(239, 68, 68, 0.4); 
+            box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+            text-align: center;
+        }
+
+        .controls-row { 
+            display: flex; 
+            justify-content: space-between; 
+            align-items: center; 
+            gap: 15px; 
+        }
+        
+        button {
+            background: #ef4444; 
+            color: white; 
+            border: none; 
+            border-radius: 8px;
+            padding: 10px 22px; 
+            font-weight: 700; 
+            cursor: pointer; 
+            transition: all 0.2s;
+            box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+        }
+        button:hover { 
+            background: #f87171; 
+            transform: translateY(-1px); 
+        }
+
+        select {
+            background: #1e293b; 
+            color: white; 
+            border: 1px solid #334155;
+            padding: 8px 14px; 
+            border-radius: 8px; 
+            cursor: pointer; 
+            font-weight: 500;
+        }
+
+        #date-display { 
+            font-size: 1.25rem; 
+            font-weight: 700; 
+            letter-spacing: 2px; 
+            color: #ef4444; 
+            min-width: 150px; 
+            text-align: center; 
+        }
+
+        input[type=range] {
+            -webkit-appearance: none; 
+            width: 100%; 
+            background: transparent; 
+            cursor: pointer;
+        }
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%; 
+            height: 6px; 
+            background: #334155; 
+            border-radius: 3px;
+        }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none; 
+            height: 18px; 
+            width: 18px; 
+            border-radius: 50%;
+            background: #ef4444; 
+            margin-top: -6px; 
+            box-shadow: 0 0 12px #ef4444;
+        }
+
+        #stats { 
+            position: absolute; 
+            top: 20px; 
+            left: 20px; 
+            z-index: 10; 
+            font-size: 14px; 
+            color: #94a3b8; 
+            background: rgba(15,23,42,0.7); 
+            padding: 8px 14px; 
+            border-radius: 8px; 
+            border: 1px solid rgba(255,255,255,0.08); 
+        }
+    </style>
+
+    <!-- Importation de Three.js -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+<body>
+
+    <div id="loading">Chargement des données...</div>
+    <div id="stats">Événements chargés : <span id="event-count">0</span></div>
+    
+    <div id="canvas-container"></div>
+
+    <div id="ui-container" style="display: none;">
+        <input type="range" id="timeline" min="0" max="1000" value="0">
+        <div class="controls-row">
+            <button id="btn-play">PAUSE</button>
+            <div id="date-display">1988-01-01</div>
+            <select id="speed-select">
+                <option value="2629746000">1 Mois / sec</option>
+                <option value="15778476000">6 Mois / sec</option>
+                <option value="31556952000" selected>1 An / sec</option>
+                <option value="94670856000">3 Ans / sec</option>
+            </select>
+        </div>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        // --- 1. CONFIGURATION GLOBALE ---
+        const R_EARTH = 50;
+        let fireballs = [];
+        let activeAnimations = [];
+        
+        let isPlaying = true;
+        let virtualTime = 0;
+        let startTime = 0;
+        let endTime = 0;
+        let speed = 31556952000;
+        let lastRealTime = performance.now();
+
+        // Éléments UI
+        const uiContainer = document.getElementById('ui-container');
+        const loading = document.getElementById('loading');
+        const timeline = document.getElementById('timeline');
+        const btnPlay = document.getElementById('btn-play');
+        const speedSelect = document.getElementById('speed-select');
+        const dateDisplay = document.getElementById('date-display');
+        const eventCount = document.getElementById('event-count');
+
+        // --- 2. INITIALISATION DU MOTEUR 3D ---
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x030712);
+
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 1, 1000);
+        camera.position.set(0, 30, 150);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        controls.minDistance = R_EARTH + 10;
+        controls.maxDistance = 300;
+
+        // --- 3. GÉNÉRATEUR DE TEXTURE CARTOON HAUTE PRÉCISION ---
+        const earthCanvas = document.createElement('canvas');
+        earthCanvas.width = 2048;
+        earthCanvas.height = 1024;
+        const earthTexture = new THREE.CanvasTexture(earthCanvas);
+
+        function drawEarthTexture(geoJsonData = null) {
+            const ctx = earthCanvas.getContext('2d');
+            const w = earthCanvas.width;
+            const h = earthCanvas.height;
+
+            // Fond Océan bleu clair vectoriel
+            ctx.fillStyle = '#4a90e2';
+            ctx.fillRect(0, 0, w, h);
+
+            // Style des continents
+            ctx.fillStyle = '#7bc652';
+            ctx.strokeStyle = '#5da638';
+            ctx.lineWidth = 1.5;
+            ctx.lineJoin = 'round';
+
+            const project = (lon, lat) => [
+                ((lon + 180) / 360) * w,
+                ((90 - lat) / 180) * h
+            ];
+
+            if (geoJsonData) {
+                const features = geoJsonData.features || [];
+                features.forEach(feature => {
+                    const geom = feature.geometry;
+                    if (!geom) return;
+
+                    const drawRing = (ring) => {
+                        ctx.beginPath();
+                        ring.forEach(([lon, lat], i) => {
+                            const [x, y] = project(lon, lat);
+                            if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+                        });
+                        ctx.closePath();
+                        ctx.fill();
+                        ctx.stroke();
+                    };
+
+                    if (geom.type === 'Polygon') {
+                        geom.coordinates.forEach(ring => drawRing(ring));
+                    } else if (geom.type === 'MultiPolygon') {
+                        geom.coordinates.forEach(polygon => {
+                            polygon.forEach(ring => drawRing(ring));
+                        });
+                    }
+                });
+            } else {
+                function drawPolygon(coords) {
+                    ctx.beginPath();
+                    coords.forEach(([lon, lat], i) => {
+                        const [x, y] = project(lon, lat);
+                        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+                    });
+                    ctx.closePath();
+                    ctx.fill();
+                    ctx.stroke();
+                }
+
+                // Carte vectorielle simplifiée de secours
+                drawPolygon([[-168,65],[-150,60],[-130,54],[-122,38],[-110,23],[-90,16],[-82,25],[-70,41],[-55,52],[-78,62],[-120,70]]);
+                drawPolygon([[-78,9],[-50,0],[-35,-5],[-42,-23],[-65,-54],[-75,-48],[-80,-2]]);
+                drawPolygon([[-9,38],[0,43],[-5,58],[15,65],[30,60],[25,40],[35,31],[45,13],[60,24],[78,8],[98,10],[122,30],[140,50],[178,66],[110,74],[30,70]]);
+                drawPolygon([[-18,35],[32,32],[50,12],[35,-22],[18,-34],[0,5],[-17,21]]);
+                drawPolygon([[114,-22],[130,-14],[153,-28],[138,-35],[113,-26]]);
+            }
+
+            earthTexture.needsUpdate = true;
+        }
+
+        drawEarthTexture();
+
+        // Chargement du fichier GeoJSON local
+        fetch('./ne_110m_land.geojson')
+            .then(res => res.json())
+            .then(geoJson => drawEarthTexture(geoJson))
+            .catch(() => console.log("Affichage de la carte locale par défaut."));
+
+        // --- 4. CRÉATION DU GLOBE TERRESTRE ---
+        const earthGroup = new THREE.Group();
+        scene.add(earthGroup);
+
+        const impactsGroup = new THREE.Group();
+        earthGroup.add(impactsGroup);
+
+        const earthGeo = new THREE.SphereGeometry(R_EARTH, 64, 64);
+        const earthMat = new THREE.MeshToonMaterial({
+            map: earthTexture
+        });
+
+        const earthMesh = new THREE.Mesh(earthGeo, earthMat);
+        earthGroup.add(earthMesh);
+
+        // Lumières du style cartoon
+        const ambientLight = new THREE.AmbientLight(0xffffff, 1.4);
+        scene.add(ambientLight);
+
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        dirLight.position.set(100, 100, 100);
+        scene.add(dirLight);
+
+        // --- 5. CALCUL DES COORDONNÉES 3D ---
+        function getVector3FromLatLon(lat, lon, radius) {
+            const phi = (90 - lat) * (Math.PI / 180);
+            const theta = (lon + 180) * (Math.PI / 180);
+            return new THREE.Vector3(
+                -(radius * Math.sin(phi) * Math.cos(theta)),
+                radius * Math.cos(phi),
+                radius * Math.sin(phi) * Math.sin(theta)
+            );
+        }
+
+        // --- 6. CHARGEMENT DES DONNÉES ---
+        async function loadNasaData() {
+            try {
+                let response = null;
+
+                try {
+                    const localRes = await fetch('./fireball.json');
+                    if (localRes.ok) response = localRes;
+                } catch (e) {}
+
+                if (!response) {
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), 5000);
+                    response = await fetch('https://ssd-api.jpl.nasa.gov/fireball.api?date-min=1988-01-01&req-loc=true', { signal: controller.signal });
+                    clearTimeout(timeoutId);
+                }
+
+                if (!response || !response.ok) throw new Error('Données introuvables');
+
+                const json = await response.json();
+                const fields = json.fields;
+                
+                fireballs = json.data.map(row => {
+                    const obj = {};
+                    fields.forEach((field, index) => obj[field] = row[index]);
+                    
+                    if (!obj.lat || !obj.lon) return null;
+
+                    const dateStr = obj.date.replace(' ', 'T');
+                    const time = new Date(dateStr).getTime();
+                    if (isNaN(time)) return null;
+
+                    let lat = parseFloat(obj.lat);
+                    if (obj['lat-dir'] === 'S') lat *= -1;
+                    
+                    let lon = parseFloat(obj.lon);
+                    if (obj['lon-dir'] === 'W') lon *= -1;
+
+                    const energy = parseFloat(obj['impact-e']) || parseFloat(obj.energy) || 0.1;
+
+                    return { time, lat, lon, energy };
+                }).filter(Boolean);
+
+                fireballs.sort((a, b) => a.time - b.time);
+                eventCount.innerText = fireballs.length;
+
+                startTime = fireballs[0].time;
+                endTime = fireballs[fireballs.length - 1].time;
+                virtualTime = startTime;
+
+                loading.style.display = 'none';
+                uiContainer.style.display = 'flex';
+
+            } catch (error) {
+                loading.innerText = "Erreur : Assurez-vous que fireball.json est dans le dossier.";
+                loading.style.color = "#ef4444";
+            }
+        }
+
+        // --- 7. IMPACTS & VFX ---
+        function createImpact(event) {
+            const pos = getVector3FromLatLon(event.lat, event.lon, R_EARTH + 0.3);
+            const baseRadius = 0.5;
+            const size = baseRadius + Math.sqrt(event.energy) * 0.4;
+
+            const ringGeo = new THREE.RingGeometry(0.1, size, 32);
+            const ringMat = new THREE.MeshBasicMaterial({ 
+                color: 0xef4444, 
+                side: THREE.DoubleSide, 
+                transparent: true, 
+                opacity: 1,
+                depthWrite: false,
+                depthTest: true
+            });
+            const ring = new THREE.Mesh(ringGeo, ringMat);
+            ring.position.copy(pos);
+            ring.lookAt(pos.clone().multiplyScalar(2));
+            impactsGroup.add(ring);
+
+            const startPos = getVector3FromLatLon(event.lat, event.lon, R_EARTH + 10);
+            const lineGeo = new THREE.BufferGeometry().setFromPoints([startPos, pos]);
+            const lineMat = new THREE.LineBasicMaterial({ 
+                color: 0xffffff, 
+                transparent: true, 
+                opacity: 0.9,
+                depthTest: true 
+            });
+            const line = new THREE.Line(lineGeo, lineMat);
+            impactsGroup.add(line);
+
+            activeAnimations.push({
+                ring, line, 
+                createdAt: performance.now(),
+                duration: 1500
+            });
+        }
+
+        // --- 8. ÉVÉNEMENTS UI ---
+        btnPlay.addEventListener('click', () => {
+            isPlaying = !isPlaying;
+            btnPlay.innerText = isPlaying ? "PAUSE" : "LECTURE";
+            btnPlay.style.background = isPlaying ? "#ef4444" : "#22c55e";
+            lastRealTime = performance.now();
+        });
+
+        speedSelect.addEventListener('change', (e) => {
+            speed = parseFloat(e.target.value);
+        });
+
+        timeline.addEventListener('input', (e) => {
+            const progress = e.target.value / 1000;
+            virtualTime = startTime + progress * (endTime - startTime);
+            updateDateDisplay();
+        });
+
+        function updateDateDisplay() {
+            const d = new Date(virtualTime);
+            const day = String(d.getDate()).padStart(2, '0');
+            const month = String(d.getMonth() + 1).padStart(2, '0');
+            const year = d.getFullYear();
+            dateDisplay.innerText = `${day}/${month}/${year}`;
+        }
+
+        // --- 9. BOUCLE D'ANIMATION ---
+        function animate(now) {
+            requestAnimationFrame(animate);
+
+            earthGroup.rotation.y += 0.0008;
+            
+            const deltaTime = now - lastRealTime;
+            lastRealTime = now;
+
+            if (isPlaying && fireballs.length > 0) {
+                const previousTime = virtualTime;
+                virtualTime += (deltaTime / 1000) * speed;
+
+                if (virtualTime > endTime) {
+                    virtualTime = startTime;
+                    activeAnimations.forEach(anim => {
+                        impactsGroup.remove(anim.ring);
+                        impactsGroup.remove(anim.line);
+                    });
+                    activeAnimations = [];
+                }
+
+                for (let i = 0; i < fireballs.length; i++) {
+                    const fb = fireballs[i];
+                    if (fb.time > previousTime && fb.time <= virtualTime) {
+                        createImpact(fb);
+                    }
+                }
+
+                const progress = (virtualTime - startTime) / (endTime - startTime);
+                timeline.value = progress * 1000;
+                updateDateDisplay();
+            }
+
+            for (let i = activeAnimations.length - 1; i >= 0; i--) {
+                const anim = activeAnimations[i];
+                const age = now - anim.createdAt;
+                const progress = age / anim.duration;
+
+                if (progress >= 1) {
+                    impactsGroup.remove(anim.ring);
+                    impactsGroup.remove(anim.line);
+                    anim.ring.geometry.dispose();
+                    anim.ring.material.dispose();
+                    anim.line.geometry.dispose();
+                    anim.line.material.dispose();
+                    activeAnimations.splice(i, 1);
+                } else {
+                    anim.ring.scale.set(1 + progress * 2, 1 + progress * 2, 1);
+                    anim.ring.material.opacity = 1 - progress;
+                    anim.line.material.opacity = 0.9 * (1 - progress);
+                }
+            }
+
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        loadNasaData();
+        requestAnimationFrame(animate);
+    </script>
+</body>
+</html>
